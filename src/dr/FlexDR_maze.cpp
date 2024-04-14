@@ -2104,6 +2104,7 @@ void FlexDRWorker::route_queue() {
 
 void FlexDRWorker::route_queue_main(queue<RouteQueueEntry> &rerouteQueue) {
   auto &workerRegionQuery = getWorkerRegionQuery();
+  gridGraph.simd_set_vars();
   while (!rerouteQueue.empty()) {
     // cout << "rerouteQueue size = " << rerouteQueue.size() << endl;
     auto& entry = rerouteQueue.front();

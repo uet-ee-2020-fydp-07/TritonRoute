@@ -38,6 +38,7 @@
 #include "dr/FlexWavefront.h"
 #include <map>
 #include <iostream>
+#include <immintrin.h>
 
 
 namespace fr {
@@ -749,6 +750,41 @@ namespace fr {
     frCoord getVia2TurnMinLen(frMIdx z, bool isPrevViaUp, bool isCurrDirY) const {
       return (*via2turnMinLen)[z][((unsigned)isPrevViaUp << 1) + (unsigned)isCurrDirY];
     }
+
+    void simd_set_vars(){
+        frMIdx xDim, yDim, zDim;
+        getDim(xDim, yDim, zDim);
+        X_id = _mm256_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0);
+        Y_id = _mm256_setr_epi32(1, 1, 1, 1, 1, 1, 1, 1);
+        Z_id = _mm256_setr_epi32(2, 2, 2, 2, 2, 2, 2, 2);//  (gridX, gridY, gridZ, getZDir_zIdx1, getZDir_zIdx2,  getZDir_zIdx3, 0, 0);
+        idx_mask_id = _mm256_setr_epi32(3, 3, 3, 4, 3, 3, 5, 6);
+        XMax = _mm256_set1_epi32(xDim);
+	      YMax = _mm256_set1_epi32(yDim);// 2(getZDir_zIdx1, getZDir_zIdx1, getZDir_zIdx1, getZDir_zIdx2, getZDir_zIdx1, getZDir_zIdx1, getZDir_zIdx3, 0),
+	      ZMax = _mm256_set1_epi32(zDim);
+        X_inc = _mm256_setr_epi32(0, -1, 0, 0, 1, 0, 0, 0);
+        Y_inc = _mm256_setr_epi32(0, 0, -1, 0, 0, 1, 0, 0);
+        Z_inc = _mm256_setr_epi32(0, 0, 0, -1, 0, 0, 1, 0);
+        Zeros_cmp = _mm256_setzero_si256();
+        Zeros64 = _mm512_setzero_si512();
+	      Ones_And = _mm512_set1_epi64(1);
+        he_hgc_ib_bits_id = _mm512_setr_epi64(0, 1, 0, 2, 0, 3, 0, 3);
+        he_id = _mm512_setr_epi64(0,0,1,1,2,2, 11, 11);
+        hgc_id =_mm512_setr_epi64(12,12,13,13,14,14, 0, 0);
+        ib_id = _mm512_setr_epi64(3, 3, 4, 4, 5, 5, 0, 0);
+        //bits_pos = _mm512_setr_epi64(16, 32, 56, 0, 24, 40, 48, 0);
+        bits_tmp = _mm512_sllv_epi64( _mm512_set1_epi64(((1ull << GRIDGRAPHDRCCOSTSIZE) - 1)), 
+                           _mm512_setr_epi64(16, 32, 56, 0, 24, 40, 48, 0));
+        hdc_hmc_hsc_id = _mm512_setr_epi64(4, 1, 5, 2, 0, 3, 7, 7);
+        bits_pos_hdc = _mm512_setr_epi64(16, 16, 16, 16, 24, 24, 0, 0);        
+        bits_tmp_hdc = _mm512_permutex_epi64( bits_tmp, 0b00000000);
+        bits_pos_hmc = _mm512_setr_epi64(32, 32, 32, 32, 40, 40, 0, 0);  
+        bits_tmp_hmc = _mm512_permutex_epi64(bits_tmp, 0b01010101);
+        bits_pos_hsc = _mm512_setr_epi64(56, 56, 56, 56, 48, 48, 0, 0);  
+        bits_tmp_hsc = _mm512_permutex_epi64(bits_tmp, 0b10101010);
+        
+        
+    }
+
     void cleanup() {
       bits.clear();
       bits.shrink_to_fit();
@@ -805,6 +841,12 @@ namespace fr {
     frUInt4                                    ggMarkerCost;
     // temporary variables
     FlexWavefront                              wavefront;
+    __mmask8 isValid_mask, idx_mask;
+    __m256i X_id, Y_id, Z_id, X, Y, Z, XMax, YMax, ZMax, X_inc, Y_inc, Z_inc, Zeros_cmp, Vec, Idx, idx_mask_id ;
+    __m512i Zeros64, Ones_And, he_hgc_ib_bits_id, hdc_hmc_hsc_id, he_id, hgc_id, ib_id, bits_tmp, bits_pos, 
+    bits_pos_hdc, bits_tmp_hdc, bits_pos_hmc, bits_tmp_hmc, bits_pos_hsc, bits_tmp_hsc, bit_vals, bit_vals_he_hgc_ib, 
+    has_edge, has_grid_cost, is_blocked, bit_vals_hdc_hmc_hsc, has_drc_cost, has_marker_cost, has_shape_cost;
+
     const std::vector<std::pair<frCoord, frCoord> >* halfViaEncArea; // std::pair<layer1area, layer2area>
     // via2viaMinLen[z][0], last via is down, curr via is down
     // via2viaMinLen[z][1], last via is down, curr via is up
@@ -950,6 +992,8 @@ namespace fr {
     FlexMazeIdx getTailIdx(const FlexMazeIdx &currIdx, const FlexWavefrontGrid &currGrid) const;
     void expand(FlexWavefrontGrid &currGrid, const frDirEnum &dir, const FlexMazeIdx &dstMazeIdx1, const FlexMazeIdx &dstMazeIdx2,
                 const frPoint &centerPt);
+    void comp_exp_funcs_simd(const FlexWavefrontGrid &currGrid );
+
   };
 }
 

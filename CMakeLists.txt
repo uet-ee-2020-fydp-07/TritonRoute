@@ -33,6 +33,8 @@ set(LEFLIB_HOME
   ${PROJECT_SOURCE_DIR}/module/lef/5.8-p029
 )
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m64 -O3 -std=c++17 -mavx2 -mfma -mavx512f -mavx512vl -mavx512dq")
+
 ## include subdirectories
 add_subdirectory(${DEFLIB_HOME})
 add_subdirectory(${LEFLIB_HOME})
@@ -228,7 +230,10 @@ target_compile_options( TritonRoute
   $<$<CXX_COMPILER_ID:GNU>:-Wall -pedantic -Wcast-qual -Wredundant-decls -Wformat-security>
   $<$<CXX_COMPILER_ID:AppleClang>:-Wall -pedantic -Wcast-qual -Wredundant-decls -Wformat-security>
   $<$<CXX_COMPILER_ID:Clang>:-Wall -pedantic -Wcast-qual -Wredundant-decls -Wformat-security>
+  
   )
+  
+
 
 ############################################################
 # Unit testing

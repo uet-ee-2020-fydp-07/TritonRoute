@@ -28,9 +28,11 @@
 
 #include "dr/FlexGridGraph.h"
 #include "dr/FlexDR.h"
+#include <chrono>
 
 using namespace std;
 using namespace fr;
+using namespace chrono;
 
 void FlexGridGraph::expand(FlexWavefrontGrid &currGrid, const frDirEnum &dir, 
                                       const FlexMazeIdx &dstMazeIdx1, const FlexMazeIdx &dstMazeIdx2,
@@ -136,6 +138,124 @@ void FlexGridGraph::expand(FlexWavefrontGrid &currGrid, const frDirEnum &dir,
   return;
 }
 
+void FlexGridGraph::comp_exp_funcs_simd(const FlexWavefrontGrid &currGrid )  {
+
+  auto t1 = high_resolution_clock::now();
+	
+	frMIdx gridX, gridY, gridZ;
+  bool getZDir_zIdx1, getZDir_zIdx2, getZDir_zIdx3;
+ 
+  gridX = currGrid.x();
+  gridY = currGrid.y();
+  gridZ = currGrid.z();
+  
+	getZDir_zIdx1 = getZDir(gridZ);
+	getZDir_zIdx2 = getZDir(gridZ - 1);
+	getZDir_zIdx3 = getZDir(gridZ + 1);
+	
+	Vec = _mm256_setr_epi32 (gridX, gridY, gridZ, getZDir_zIdx1, getZDir_zIdx2,  getZDir_zIdx3, 0, 0);
+	
+	X = _mm256_add_epi32(_mm256_permutevar8x32_epi32(Vec, X_id), X_inc);
+  Y = _mm256_add_epi32(_mm256_permutevar8x32_epi32(Vec, Y_id), Y_inc);
+  Z = _mm256_add_epi32(_mm256_permutevar8x32_epi32(Vec, Z_id), Z_inc);
+  idx_mask = _mm256_cmpgt_epi32_mask(
+    _mm256_permutevar8x32_epi32(Vec, idx_mask_id), Zeros_cmp);
+
+	
+	// isValid_mask = (X | Y | Z) >= 0  &  (X < XMax) & (Y < YMax) & (Z < ZMax);
+	
+	isValid_mask = _kand_mask8(
+		_mm256_cmp_epi32_mask(_mm256_or_epi32(_mm256_or_epi32(X, Y), Z), Zeros_cmp, 5), 
+		_kand_mask8( _mm256_cmp_epi32_mask(X, XMax, 1),
+		_kand_mask8( _mm256_cmp_epi32_mask(Y, YMax, 1) ,_mm256_cmp_epi32_mask(Z, ZMax, 1))));
+
+	// Idx = (idx_mask) ?  X + Y*XMax + Z*XMax*YMax :  Y + X*YMax + Z*XMax*YMax
+	Idx = _mm256_mask_blend_epi32(idx_mask,
+					_mm256_add_epi32(_mm256_mul_epi32(_mm256_add_epi32(_mm256_mul_epi32(Z, XMax), X), YMax), Y),
+					_mm256_add_epi32(_mm256_mul_epi32(_mm256_add_epi32(_mm256_mul_epi32(Z, YMax), Y), XMax), X));
+
+	// HasEdge Is Valid will be used for loading numbers from bits array
+	
+	// bits_vals = (isValid_mask) ? bits[Idx] : 0
+	bit_vals = _mm512_mask_i32gather_epi64 (Zeros64, isValid_mask, Idx, (const long long*)&bits[0], 8);
+	
+	bit_vals_he_hgc_ib = _mm512_permutexvar_epi64(he_hgc_ib_bits_id, bit_vals);
+	
+	has_edge = _mm512_and_epi64(_mm512_srlv_epi64(bit_vals_he_hgc_ib, he_id), Ones_And);
+									
+	has_grid_cost = _mm512_and_epi64( _mm512_srlv_epi64(bit_vals_he_hgc_ib, hgc_id) , Ones_And);
+											
+	is_blocked = _mm512_and_epi64(_mm512_srlv_epi64(bit_vals_he_hgc_ib, ib_id), Ones_And);	
+	
+	bit_vals_hdc_hmc_hsc = _mm512_permutexvar_epi64(hdc_hmc_hsc_id, bit_vals);								
+	
+	has_drc_cost = _mm512_srlv_epi64(_mm512_and_epi64(bit_vals_hdc_hmc_hsc, bits_tmp_hdc), bits_pos_hdc);
+									
+	has_marker_cost = _mm512_srlv_epi64(_mm512_and_epi64(bit_vals_hdc_hmc_hsc, bits_tmp_hmc), bits_pos_hmc);
+									
+	has_shape_cost = _mm512_andnot_epi64(
+    _mm512_permutex_epi64( _mm512_mask_blend_epi64(0b00000011, Zeros64, has_edge), 0b00001011),
+    _mm512_srlv_epi64(_mm512_and_epi64(bit_vals_hdc_hmc_hsc , bits_tmp_hsc), bits_pos_hsc));
+
+
+  auto t2 = high_resolution_clock::now();
+
+  bool HE_N = hasEdge(gridX, gridY, gridZ, frDirEnum::N);
+  bool HE_S = hasEdge(gridX, gridY, gridZ, frDirEnum::S);
+  bool HE_U = hasEdge(gridX, gridY, gridZ, frDirEnum::U);
+  bool HE_D = hasEdge(gridX, gridY, gridZ, frDirEnum::D);
+  bool HE_E = hasEdge(gridX, gridY, gridZ, frDirEnum::E);
+  bool HE_W = hasEdge(gridX, gridY, gridZ, frDirEnum::W);
+
+  bool HGC_N = hasGridCost(gridX, gridY, gridZ, frDirEnum::N);
+  bool HGC_S = hasGridCost(gridX, gridY, gridZ, frDirEnum::S);
+  bool HGC_U = hasGridCost(gridX, gridY, gridZ, frDirEnum::U);
+  bool HGC_D = hasGridCost(gridX, gridY, gridZ, frDirEnum::D);
+  bool HGC_E = hasGridCost(gridX, gridY, gridZ, frDirEnum::E);
+  bool HGC_W = hasGridCost(gridX, gridY, gridZ, frDirEnum::W);
+
+  bool IB_N = isBlocked(gridX, gridY, gridZ, frDirEnum::N);
+  bool IB_S = isBlocked(gridX, gridY, gridZ, frDirEnum::S);
+  bool IB_U = isBlocked(gridX, gridY, gridZ, frDirEnum::U);
+  bool IB_D = isBlocked(gridX, gridY, gridZ, frDirEnum::D);
+  bool IB_E = isBlocked(gridX, gridY, gridZ, frDirEnum::E);
+  bool IB_W = isBlocked(gridX, gridY, gridZ, frDirEnum::W);
+
+  bool HM_N = hasMarkerCost(gridX, gridY, gridZ, frDirEnum::N);
+  bool HM_S = hasMarkerCost(gridX, gridY, gridZ, frDirEnum::S);
+  bool HM_U = hasMarkerCost(gridX, gridY, gridZ, frDirEnum::U);
+  bool HM_D = hasMarkerCost(gridX, gridY, gridZ, frDirEnum::D);
+  bool HM_E = hasMarkerCost(gridX, gridY, gridZ, frDirEnum::E);
+  bool HM_W = hasMarkerCost(gridX, gridY, gridZ, frDirEnum::W);
+
+  bool HDC_N = hasDRCCost(gridX, gridY, gridZ, frDirEnum::N);
+  bool HDC_S = hasDRCCost(gridX, gridY, gridZ, frDirEnum::S);
+  bool HDC_U = hasDRCCost(gridX, gridY, gridZ, frDirEnum::U);
+  bool HDC_D = hasDRCCost(gridX, gridY, gridZ, frDirEnum::D);
+  bool HDC_E = hasDRCCost(gridX, gridY, gridZ, frDirEnum::E);
+  bool HDC_W = hasDRCCost(gridX, gridY, gridZ, frDirEnum::W);
+
+  bool HSC_N = hasShapeCost(gridX, gridY, gridZ, frDirEnum::N);
+  bool HSC_S = hasShapeCost(gridX, gridY, gridZ, frDirEnum::S);
+  bool HSC_U = hasShapeCost(gridX, gridY, gridZ, frDirEnum::U);
+  bool HSC_D = hasShapeCost(gridX, gridY, gridZ, frDirEnum::D);
+  bool HSC_E = hasShapeCost(gridX, gridY, gridZ, frDirEnum::E);
+  bool HSC_W = hasShapeCost(gridX, gridY, gridZ, frDirEnum::W);
+
+  auto t3 = high_resolution_clock::now();
+
+  auto duration1 = duration_cast<nanoseconds>(t2 - t1);
+	auto duration2 = duration_cast<nanoseconds>(t3 - t2);
+
+  cout << "Time Taken By Compiler Intrinsics is " << duration1.count() << " nanoseconds" << endl;
+  cout << "Time Taken By 6 Functions for 6 directions is " << duration2.count() << " nanoseconds" << endl;
+  cout << endl;
+
+
+  
+}
+
+
 void FlexGridGraph::expandWavefront(FlexWavefrontGrid &currGrid, const FlexMazeIdx &dstMazeIdx1, 
                                                const FlexMazeIdx &dstMazeIdx2, const frPoint &centerPt) {
   bool enableOutput = false;
@@ -186,6 +306,9 @@ void FlexGridGraph::expandWavefront(FlexWavefrontGrid &currGrid, const FlexMazeI
   //    ;
   //  }
   //}
+
+  comp_exp_funcs_simd(currGrid);
+
   // N
   if (isExpandable(currGrid, frDirEnum::N)) {
     expand(currGrid, frDirEnum::N, dstMazeIdx1, dstMazeIdx2, centerPt);
